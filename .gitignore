@@ -10,5 +10,4 @@ crm/public/frontend
 frontend/yarn.lock
 crm/www/crm.html
 build
-.env.render
 vite.config.js.timestamp-*

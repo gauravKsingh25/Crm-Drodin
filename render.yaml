@@ -1,75 +1,146 @@
-services:
-  # Database Service
-  - type: pserv
-    name: crm-postgres
-    env: docker
-    dockerfilePath: ./docker/Dockerfile.postgres
-    disk:
-      name: postgres-data
-      mountPath: /var/lib/postgresql/data
-      sizeGB: 10
-    envVars:
-      - key: POSTGRES_DB
-        value: crm_production
-      - key: POSTGRES_USER
-        value: frappe_user
-      - key: POSTGRES_PASSWORD
-        generateValue: true
+services:services:
 
-  # Redis Service
-  - type: pserv
-    name: crm-redis
-    env: docker
-    dockerfilePath: ./docker/Dockerfile.redis
-    envVars:
-      - key: REDIS_MAXMEMORY
-        value: 512mb
+  # PostgreSQL Database (Render managed)  # Database Service
 
-  # Main Frappe CRM Web Service
-  - type: web
-    name: frappe-crm
-    env: docker
-    dockerfilePath: ./docker/Dockerfile.production
-    plan: starter
-    buildCommand: ./scripts/build.sh
-    startCommand: ./scripts/start.sh
-    healthCheckPath: /api/method/ping
-    envVars:
-      - key: FRAPPE_SITE_NAME
-        value: your-crm-domain.onrender.com
-      - key: DB_HOST
-        fromService:
-          type: pserv
-          name: crm-postgres
+  - type: pserv  - type: pserv
+
+    name: crm-database    name: crm-postgres
+
+    plan: starter    env: docker
+
+    databaseName: frappe_crm    dockerfilePath: ./docker/Dockerfile.postgres
+
+    user: frappe_user    disk:
+
+          name: postgres-data
+
+  # Redis Cache (Render managed)        mountPath: /var/lib/postgresql/data
+
+  - type: redis      sizeGB: 10
+
+    name: crm-redis    envVars:
+
+    plan: starter      - key: POSTGRES_DB
+
+            value: crm_production
+
+  # Main CRM Web Service      - key: POSTGRES_USER
+
+  - type: web        value: frappe_user
+
+    name: frappe-crm      - key: POSTGRES_PASSWORD
+
+    env: docker        generateValue: true
+
+    dockerfilePath: ./Dockerfile.render
+
+    plan: starter  # Redis Service
+
+    healthCheckPath: /api/method/ping  - type: pserv
+
+    buildCommand: echo "Docker build handles this"    name: crm-redis
+
+    envVars:    env: docker
+
+      # Database connection    dockerfilePath: ./docker/Dockerfile.redis
+
+      - key: DB_HOST    envVars:
+
+        fromDatabase:      - key: REDIS_MAXMEMORY
+
+          name: crm-database        value: 512mb
+
           property: host
-      - key: DB_PORT
-        value: 5432
-      - key: DB_NAME
-        value: crm_production
-      - key: DB_USER
-        value: frappe_user
-      - key: DB_PASSWORD
+
+      - key: DB_PORT  # Main Frappe CRM Web Service
+
+        fromDatabase:  - type: web
+
+          name: crm-database    name: frappe-crm
+
+          property: port    env: docker
+
+      - key: DB_NAME    dockerfilePath: ./docker/Dockerfile.production
+
+        value: frappe_crm    plan: starter
+
+      - key: DB_USER    buildCommand: ./scripts/build.sh
+
+        value: frappe_user    startCommand: ./scripts/start.sh
+
+      - key: DB_PASSWORD    healthCheckPath: /api/method/ping
+
+        fromDatabase:    envVars:
+
+          name: crm-database      - key: FRAPPE_SITE_NAME
+
+          property: password        value: your-crm-domain.onrender.com
+
+                - key: DB_HOST
+
+      # Redis connection          fromService:
+
+      - key: REDIS_CACHE          type: pserv
+
+        fromService:          name: crm-postgres
+
+          type: redis          property: host
+
+          name: crm-redis      - key: DB_PORT
+
+          property: connectionString        value: 5432
+
+      - key: REDIS_QUEUE      - key: DB_NAME
+
+        fromService:        value: crm_production
+
+          type: redis      - key: DB_USER
+
+          name: crm-redis        value: frappe_user
+
+          property: connectionString      - key: DB_PASSWORD
+
+      - key: REDIS_SOCKETIO        fromService:
+
+        fromService:          type: pserv
+
+          type: redis          name: crm-postgres
+
+          name: crm-redis          envVarKey: POSTGRES_PASSWORD
+
+          property: connectionString      - key: REDIS_CACHE_URL
+
+                  fromService:
+
+      # Site configuration          type: pserv
+
+      - key: SITE_NAME          name: crm-redis
+
+        value: your-app-name.onrender.com          property: connectionString
+
+      - key: ADMIN_PASSWORD      - key: REDIS_QUEUE_URL
+
+        generateValue: true        fromService:
+
+      - key: ENCRYPTION_KEY          type: pserv
+
+        generateValue: true          name: crm-redis
+
+      - key: DEVELOPER_MODE          property: connectionString
+
+        value: "0"      - key: REDIS_SOCKETIO_URL
+
         fromService:
-          type: pserv
-          name: crm-postgres
-          envVarKey: POSTGRES_PASSWORD
-      - key: REDIS_CACHE_URL
-        fromService:
-          type: pserv
-          name: crm-redis
-          property: connectionString
-      - key: REDIS_QUEUE_URL
-        fromService:
-          type: pserv
-          name: crm-redis
-          property: connectionString
-      - key: REDIS_SOCKETIO_URL
-        fromService:
-          type: pserv
-          name: crm-redis
-          property: connectionString
-      - key: ADMIN_PASSWORD
-        generateValue: true
+
+databases:          type: pserv
+
+  - name: crm-database          name: crm-redis
+
+    databaseName: frappe_crm          property: connectionString
+
+    user: frappe_user      - key: ADMIN_PASSWORD
+
+    plan: starter        generateValue: true
       - key: ENCRYPTION_KEY
         generateValue: true
       - key: DEVELOPER_MODE

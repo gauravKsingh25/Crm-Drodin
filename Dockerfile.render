@@ -1,0 +1,33 @@
+# Render-compatible Dockerfile
+# Uses your existing production setup
+
+FROM frappe/erpnext:v15.0.4
+
+# Set working directory
+WORKDIR /home/frappe/frappe-bench
+
+# Copy your CRM app
+COPY . ./apps/crm/
+
+# Switch to frappe user
+USER frappe
+
+# Install the CRM app
+RUN bench get-app crm ./apps/crm
+RUN bench install-app crm
+
+# Build frontend assets
+WORKDIR ./apps/crm/frontend
+RUN npm install && npm run build
+
+WORKDIR /home/frappe/frappe-bench
+
+# Expose port
+EXPOSE 8000
+
+# Use your production init script
+COPY production-init.sh /docker-entrypoint.d/
+RUN chmod +x /docker-entrypoint.d/production-init.sh
+
+# Start command for Render
+CMD ["bench", "start"]
