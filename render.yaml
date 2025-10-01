@@ -1,0 +1,164 @@
+services:
+  # Database Service
+  - type: pserv
+    name: crm-postgres
+    env: docker
+    dockerfilePath: ./docker/Dockerfile.postgres
+    disk:
+      name: postgres-data
+      mountPath: /var/lib/postgresql/data
+      sizeGB: 10
+    envVars:
+      - key: POSTGRES_DB
+        value: crm_production
+      - key: POSTGRES_USER
+        value: frappe_user
+      - key: POSTGRES_PASSWORD
+        generateValue: true
+
+  # Redis Service
+  - type: pserv
+    name: crm-redis
+    env: docker
+    dockerfilePath: ./docker/Dockerfile.redis
+    envVars:
+      - key: REDIS_MAXMEMORY
+        value: 512mb
+
+  # Main Frappe CRM Web Service
+  - type: web
+    name: frappe-crm
+    env: docker
+    dockerfilePath: ./docker/Dockerfile.production
+    plan: starter
+    buildCommand: ./scripts/build.sh
+    startCommand: ./scripts/start.sh
+    healthCheckPath: /api/method/ping
+    envVars:
+      - key: FRAPPE_SITE_NAME
+        value: your-crm-domain.onrender.com
+      - key: DB_HOST
+        fromService:
+          type: pserv
+          name: crm-postgres
+          property: host
+      - key: DB_PORT
+        value: 5432
+      - key: DB_NAME
+        value: crm_production
+      - key: DB_USER
+        value: frappe_user
+      - key: DB_PASSWORD
+        fromService:
+          type: pserv
+          name: crm-postgres
+          envVarKey: POSTGRES_PASSWORD
+      - key: REDIS_CACHE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_QUEUE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_SOCKETIO_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: DEVELOPER_MODE
+        value: 0
+
+  # Background Worker
+  - type: worker
+    name: frappe-crm-worker
+    env: docker
+    dockerfilePath: ./docker/Dockerfile.production
+    startCommand: ./scripts/worker.sh
+    envVars:
+      - key: FRAPPE_SITE_NAME
+        value: your-crm-domain.onrender.com
+      - key: DB_HOST
+        fromService:
+          type: pserv
+          name: crm-postgres
+          property: host
+      - key: DB_PORT
+        value: 5432
+      - key: DB_NAME
+        value: crm_production
+      - key: DB_USER
+        value: frappe_user
+      - key: DB_PASSWORD
+        fromService:
+          type: pserv
+          name: crm-postgres
+          envVarKey: POSTGRES_PASSWORD
+      - key: REDIS_CACHE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_QUEUE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_SOCKETIO_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+
+  # Scheduler
+  - type: worker
+    name: frappe-crm-scheduler
+    env: docker
+    dockerfilePath: ./docker/Dockerfile.production
+    startCommand: ./scripts/scheduler.sh
+    envVars:
+      - key: FRAPPE_SITE_NAME
+        value: your-crm-domain.onrender.com
+      - key: DB_HOST
+        fromService:
+          type: pserv
+          name: crm-postgres
+          property: host
+      - key: DB_PORT
+        value: 5432
+      - key: DB_NAME
+        value: crm_production
+      - key: DB_USER
+        value: frappe_user
+      - key: DB_PASSWORD
+        fromService:
+          type: pserv
+          name: crm-postgres
+          envVarKey: POSTGRES_PASSWORD
+      - key: REDIS_CACHE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_QUEUE_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+      - key: REDIS_SOCKETIO_URL
+        fromService:
+          type: pserv
+          name: crm-redis
+          property: connectionString
+
+databases:
+  - name: crm-postgres-db
+    databaseName: crm_production
+    user: frappe_user
+    plan: starter

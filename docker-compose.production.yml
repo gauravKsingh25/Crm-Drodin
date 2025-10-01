@@ -1,0 +1,203 @@
+version: "3.8"
+name: crm-production
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true" 
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "letsencrypt_data:/letsencrypt"
+    networks:
+      - crm_network
+    restart: unless-stopped
+
+  mariadb:
+    image: mariadb:10.8
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+      - --innodb-buffer-pool-size=1G
+      - --innodb-log-file-size=256M
+      - --innodb-flush-log-at-trx-commit=2
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mysql/custom.cnf:/etc/mysql/conf.d/custom.cnf
+    networks:
+      - crm_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1000
+    volumes:
+      - redis_data:/data
+    networks:
+      - crm_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 3s
+      retries: 5
+
+  frappe:
+    image: ghcr.io/frappe/crm:${CRM_VERSION:-latest}
+    environment:
+      - SHELL=/bin/bash
+      - SITE_NAME=${DOMAIN_NAME}
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER} 
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+      - REDIS_CACHE=redis://redis:6379/0
+      - REDIS_QUEUE=redis://redis:6379/1
+      - REDIS_SOCKETIO=redis://redis:6379/2
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DEVELOPER_MODE=0
+      - ALLOW_TESTS=0
+    volumes:
+      - frappe_sites:/home/frappe/frappe-bench/sites
+      - frappe_logs:/home/frappe/frappe-bench/logs
+      - ./production-init.sh:/docker-entrypoint.d/production-init.sh:ro
+    networks:
+      - crm_network
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/method/ping"]
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.crm.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.crm.entrypoints=websecure"
+      - "traefik.http.routers.crm.tls.certresolver=letsencrypt"
+      - "traefik.http.services.crm.loadbalancer.server.port=8000"
+      - "traefik.http.routers.crm.middlewares=crm-headers"
+      - "traefik.http.middlewares.crm-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+
+  # Background workers
+  frappe-worker:
+    image: ghcr.io/frappe/crm:${CRM_VERSION:-latest}
+    command: bench worker --queue default,long,short
+    environment:
+      - SHELL=/bin/bash
+      - SITE_NAME=${DOMAIN_NAME}
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_CACHE=redis://redis:6379/0
+      - REDIS_QUEUE=redis://redis:6379/1
+      - REDIS_SOCKETIO=redis://redis:6379/2
+    volumes:
+      - frappe_sites:/home/frappe/frappe-bench/sites
+      - frappe_logs:/home/frappe/frappe-bench/logs
+    networks:
+      - crm_network
+    depends_on:
+      - frappe
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  # Scheduler
+  frappe-scheduler:
+    image: ghcr.io/frappe/crm:${CRM_VERSION:-latest}
+    command: bench schedule
+    environment:
+      - SHELL=/bin/bash
+      - SITE_NAME=${DOMAIN_NAME}
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_CACHE=redis://redis:6379/0
+      - REDIS_QUEUE=redis://redis:6379/1
+      - REDIS_SOCKETIO=redis://redis:6379/2
+    volumes:
+      - frappe_sites:/home/frappe/frappe-bench/sites
+      - frappe_logs:/home/frappe/frappe-bench/logs
+    networks:
+      - crm_network
+    depends_on:
+      - frappe
+    restart: unless-stopped
+
+  # Backup service (optional)
+  backup:
+    image: ghcr.io/frappe/crm:${CRM_VERSION:-latest}
+    command: |
+      sh -c "while true; do
+        bench --site ${DOMAIN_NAME} backup --with-files --compress
+        sleep ${BACKUP_INTERVAL:-86400}
+      done"
+    environment:
+      - SITE_NAME=${DOMAIN_NAME}
+      - DB_HOST=mariadb
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - frappe_sites:/home/frappe/frappe-bench/sites
+      - backup_data:/home/frappe/frappe-bench/sites/${DOMAIN_NAME}/private/backups
+    networks:
+      - crm_network
+    depends_on:
+      - frappe
+    restart: unless-stopped
+    profiles:
+      - backup
+
+volumes:
+  mariadb_data:
+    driver: local
+  redis_data:
+    driver: local
+  frappe_sites:
+    driver: local
+  frappe_logs:
+    driver: local
+  letsencrypt_data:
+    driver: local
+  backup_data:
+    driver: local
+
+networks:
+  crm_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
